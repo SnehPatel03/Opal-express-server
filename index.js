@@ -200,7 +200,7 @@ Return only valid JSON:
         ) {
           console.error(
             "Failed to save transcript and summary",
-          );
+          );  
           return;
         }
       }
