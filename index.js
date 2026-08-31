@@ -1,0 +1,255 @@
+import cors from "cors";
+import express from "express";
+import { Server } from "socket.io";
+import dotenv from "dotenv";
+import http from "http";
+import fs from "fs";
+import path from "path";
+import axios from "axios";
+import ImageKit from "@imagekit/nodejs";
+import Groq from "groq-sdk";
+
+dotenv.config();
+
+const PORT = 5001;
+
+const app = express();
+const server = http.createServer(app);
+
+const imagekit = new ImageKit({
+  privateKey: process.env.IMAGEKIT_PRIVATE_KEY,
+});
+
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
+
+const io = new Server(server, {
+  cors: {
+    origin: process.env.ELECTRON_HOST,
+    methods: ["GET", "POST"],
+  },
+});
+
+app.use(cors());
+app.use(express.json());
+
+const uploadDirectory = path.join(process.cwd(), "temp_upload");
+
+if (!fs.existsSync(uploadDirectory)) {
+  fs.mkdirSync(uploadDirectory, {
+    recursive: true,
+  });
+}
+
+const recordedChunks = new Map();
+
+io.on("connection", (socket) => {
+  console.log("Socket connected:", socket.id);
+
+  socket.on("video-chunks", async (data) => {
+    console.log('✳️ Chunks created')
+    try {
+      const { filename, chunks } = data;
+
+      if (!filename || !chunks) return;
+
+      if (!recordedChunks.has(filename)) {
+        recordedChunks.set(filename, []);
+      }
+
+      const chunksArray = recordedChunks.get(filename);
+
+      chunksArray.push(chunks);
+
+      const videoBlob = new Blob(chunksArray, {
+        type: "video/webm",
+      });
+
+      const buffer = Buffer.from(
+        await videoBlob.arrayBuffer(),
+      );
+
+      const filePath = path.join(
+        uploadDirectory,
+        filename,
+      );
+
+      fs.writeFileSync(filePath, buffer);
+    } catch (error) {
+      console.error(
+        "Error receiving video chunk:",
+        error,
+      );
+    }
+  });
+
+  socket.on("process-video", async (data) => {
+    try {
+      const { filename, userId } = data;
+
+      if (!filename || !userId) return;
+
+      const filePath = path.join(
+        uploadDirectory,
+        filename,
+      );
+
+      if (!fs.existsSync(filePath)) {
+        console.error(
+          "Video file not found:",
+          filePath,
+        );
+        return;
+      }
+
+      recordedChunks.delete(filename);
+
+      const processingResponse = await axios.post(
+        `${process.env.NEXT_API_HOST}recording/${userId}/processing`,
+        {
+          filename,
+        },
+      );
+
+      if (processingResponse.data.status !== 200) {
+        console.error(
+          "Failed to create processing record",
+        );
+        return;
+      }
+
+      const plan = processingResponse.data.plan;
+
+      const uploadResponse =
+        await imagekit.files.upload({
+          file: fs.createReadStream(filePath),
+          fileName: filename,
+        });
+
+      let transcript = null;
+      let title = null;
+      let summary = null;
+
+      if (plan === "PRO") {
+        const transcription =
+          await groq.audio.transcriptions.create({
+            file: fs.createReadStream(filePath),
+            model: "whisper-large-v3-turbo",
+            response_format: "verbose_json",
+          });
+
+        transcript = transcription.text;
+
+        const completion =
+          await groq.chat.completions.create({
+            model: "openai/gpt-oss-120b",
+            response_format: {
+              type: "json_object",
+            },
+            messages: [
+              {
+                role: "system",
+                content: `
+Generate a short meaningful title and a clear useful summary from the video transcript.
+
+Return only valid JSON:
+
+{
+  "title": "short meaningful title",
+  "summary": "clear detailed summary"
+}
+`,
+              },
+              {
+                role: "user",
+                content: transcript,
+              },
+            ],
+          });
+
+        const aiContent =
+          completion.choices[0]?.message?.content;
+
+        if (!aiContent) {
+          console.error(
+            "Failed to generate AI content",
+          );
+          return;
+        }
+
+        const generatedContent =
+          JSON.parse(aiContent);
+
+        title = generatedContent.title;
+        summary = generatedContent.summary;
+
+        const transcribeResponse =
+          await axios.post(
+            `${process.env.NEXT_API_HOST}recording/${userId}/transcribe`,
+            {
+              filename,
+              transcript,
+              title,
+              summary,
+            },
+          );
+
+        if (
+          transcribeResponse.data.status !== 200
+        ) {
+          console.error(
+            "Failed to save transcript and summary",
+          );
+          return;
+        }
+      }
+
+      const completeResponse =
+        await axios.post(
+          `${process.env.NEXT_API_HOST}recording/${userId}/complete`,
+          {
+            filename,
+            videoUrl: uploadResponse.url,
+            fileId: uploadResponse.fileId,
+          },
+        );
+
+      if (
+        completeResponse.data.status !== 200
+      ) {
+        console.error(
+          "Failed to complete recording",
+        );
+        return;
+      }
+
+      fs.unlink(filePath, (error) => {
+        if (error) {
+          console.error(
+            "Failed to delete temporary video:",
+            error,
+          );
+        }
+      });
+    } catch (error) {
+      console.error(
+        "Error processing video:",
+        error,
+      );
+    }
+  });
+
+  socket.on("disconnect", () => {
+    console.log(
+      "Socket disconnected:",
+      socket.id,
+    );
+  });
+});
+
+server.listen(PORT, () => {
+  console.log(
+    `Server running on http://localhost:${PORT}`,
+  );
+});

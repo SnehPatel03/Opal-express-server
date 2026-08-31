@@ -1,0 +1,9 @@
+node_modules/
+.env
+.env.*
+dist/
+build/
+.next/
+.DS_Store
+*.log
+temp_upload/
