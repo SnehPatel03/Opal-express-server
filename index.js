@@ -48,10 +48,9 @@ io.on("connection", (socket) => {
   console.log("Socket connected:", socket.id);
 
   socket.on("video-chunks", async (data) => {
-    console.log('✳️ Chunks created')
     try {
       const { filename, chunks } = data;
-
+console.log("Chunks created ✅")
       if (!filename || !chunks) return;
 
       if (!recordedChunks.has(filename)) {
@@ -126,7 +125,7 @@ io.on("connection", (socket) => {
           file: fs.createReadStream(filePath),
           fileName: filename,
         });
-
+console.log("upload res",uploadResponse)
       let transcript = null;
       let title = null;
       let summary = null;
@@ -139,7 +138,12 @@ io.on("connection", (socket) => {
             response_format: "verbose_json",
           });
 
-        transcript = transcription.text;
+        transcript = transcription.text?.trim();
+
+        if (!transcript) {
+          console.error("Transcript is empty");
+          return;
+        }
 
         const completion =
           await groq.chat.completions.create({
@@ -147,23 +151,36 @@ io.on("connection", (socket) => {
             response_format: {
               type: "json_object",
             },
+            temperature: 0,
             messages: [
               {
                 role: "system",
                 content: `
-Generate a short meaningful title and a clear useful summary from the video transcript.
+You are a video transcript analysis assistant.
 
-Return only valid JSON:
+Generate:
+- A short meaningful title.
+- A clear and useful summary.
+
+Use the provided transcript.
+
+Do not ask for the transcript.
+
+Return only valid JSON in exactly this format:
 
 {
   "title": "short meaningful title",
-  "summary": "clear detailed summary"
+  "summary": "clear useful summary"
 }
+
+Do not return markdown.
+Do not return explanations.
+Do not return text outside the JSON object.
 `,
               },
               {
                 role: "user",
-                content: transcript,
+                content: `Video transcript:\n${transcript}`,
               },
             ],
           });
@@ -200,7 +217,7 @@ Return only valid JSON:
         ) {
           console.error(
             "Failed to save transcript and summary",
-          );  
+          );
           return;
         }
       }
