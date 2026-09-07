@@ -50,7 +50,7 @@ io.on("connection", (socket) => {
   socket.on("video-chunks", async (data) => {
     try {
       const { filename, chunks } = data;
-console.log("Chunks created ✅")
+      console.log("Chunks created ✅");
       if (!filename || !chunks) return;
 
       if (!recordedChunks.has(filename)) {
@@ -65,21 +65,13 @@ console.log("Chunks created ✅")
         type: "video/webm",
       });
 
-      const buffer = Buffer.from(
-        await videoBlob.arrayBuffer(),
-      );
+      const buffer = Buffer.from(await videoBlob.arrayBuffer());
 
-      const filePath = path.join(
-        uploadDirectory,
-        filename,
-      );
+      const filePath = path.join(uploadDirectory, filename);
 
       fs.writeFileSync(filePath, buffer);
     } catch (error) {
-      console.error(
-        "Error receiving video chunk:",
-        error,
-      );
+      console.error("Error receiving video chunk:", error);
     }
   });
 
@@ -89,16 +81,10 @@ console.log("Chunks created ✅")
 
       if (!filename || !userId) return;
 
-      const filePath = path.join(
-        uploadDirectory,
-        filename,
-      );
+      const filePath = path.join(uploadDirectory, filename);
 
       if (!fs.existsSync(filePath)) {
-        console.error(
-          "Video file not found:",
-          filePath,
-        );
+        console.error("Video file not found:", filePath);
         return;
       }
 
@@ -112,31 +98,27 @@ console.log("Chunks created ✅")
       );
 
       if (processingResponse.data.status !== 200) {
-        console.error(
-          "Failed to create processing record",
-        );
+        console.error("Failed to create processing record");
         return;
       }
 
       const plan = processingResponse.data.plan;
 
-      const uploadResponse =
-        await imagekit.files.upload({
-          file: fs.createReadStream(filePath),
-          fileName: filename,
-        });
-console.log("upload res",uploadResponse)
+      const uploadResponse = await imagekit.files.upload({
+        file: fs.createReadStream(filePath),
+        fileName: filename,
+      });
+      console.log("upload res", uploadResponse);
       let transcript = null;
       let title = null;
       let summary = null;
 
       if (plan === "PRO") {
-        const transcription =
-          await groq.audio.transcriptions.create({
-            file: fs.createReadStream(filePath),
-            model: "whisper-large-v3-turbo",
-            response_format: "verbose_json",
-          });
+        const transcription = await groq.audio.transcriptions.create({
+          file: fs.createReadStream(filePath),
+          model: "whisper-large-v3-turbo",
+          response_format: "verbose_json",
+        });
 
         transcript = transcription.text?.trim();
 
@@ -145,17 +127,16 @@ console.log("upload res",uploadResponse)
           return;
         }
 
-        const completion =
-          await groq.chat.completions.create({
-            model: "openai/gpt-oss-120b",
-            response_format: {
-              type: "json_object",
-            },
-            temperature: 0,
-            messages: [
-              {
-                role: "system",
-                content: `
+        const completion = await groq.chat.completions.create({
+          model: "openai/gpt-oss-120b",
+          response_format: {
+            type: "json_object",
+          },
+          temperature: 0,
+          messages: [
+            {
+              role: "system",
+              content: `
 You are a video transcript analysis assistant.
 
 Generate:
@@ -177,96 +158,70 @@ Do not return markdown.
 Do not return explanations.
 Do not return text outside the JSON object.
 `,
-              },
-              {
-                role: "user",
-                content: `Video transcript:\n${transcript}`,
-              },
-            ],
-          });
+            },
+            {
+              role: "user",
+              content: `Video transcript:\n${transcript}`,
+            },
+          ],
+        });
 
-        const aiContent =
-          completion.choices[0]?.message?.content;
+        const aiContent = completion.choices[0]?.message?.content;
 
         if (!aiContent) {
-          console.error(
-            "Failed to generate AI content",
-          );
+          console.error("Failed to generate AI content");
           return;
         }
 
-        const generatedContent =
-          JSON.parse(aiContent);
+        const generatedContent = JSON.parse(aiContent);
 
         title = generatedContent.title;
         summary = generatedContent.summary;
-
-        const transcribeResponse =
-          await axios.post(
-            `${process.env.NEXT_API_HOST}recording/${userId}/transcribe`,
-            {
-              filename,
-              transcript,
-              title,
-              summary,
-            },
-          );
-
-        if (
-          transcribeResponse.data.status !== 200
-        ) {
-          console.error(
-            "Failed to save transcript and summary",
-          );
-          return;
-        }
-      }
-
-      const completeResponse =
-        await axios.post(
-          `${process.env.NEXT_API_HOST}recording/${userId}/complete`,
+        const transcribeResponse = await axios.post(
+          `${process.env.NEXT_API_HOST}recording/${userId}/transcribe`,
           {
             filename,
-            videoUrl: uploadResponse.url,
-            fileId: uploadResponse.fileId,
+            transcript,
+            title,
+            summary,
           },
         );
 
-      if (
-        completeResponse.data.status !== 200
-      ) {
-        console.error(
-          "Failed to complete recording",
-        );
+        if (transcribeResponse.data.status !== 200) {
+          console.error("Failed to save transcript and summary");
+          return;
+        }
+      }
+      //complete response :=
+      const completeResponse = await axios.post(
+        `${process.env.NEXT_API_HOST}recording/${userId}/complete`,
+        {
+          filename,
+          videoUrl: uploadResponse.url,
+          fileId: uploadResponse.fileId,
+        },
+      );
+
+      if (completeResponse.data.status !== 200) {
+        console.error("Failed to complete recording");
         return;
       }
 
       fs.unlink(filePath, (error) => {
         if (error) {
-          console.error(
-            "Failed to delete temporary video:",
-            error,
-          );
+          console.error("Failed to delete temporary video:", error);
         }
       });
     } catch (error) {
-      console.error(
-        "Error processing video:",
-        error,
-      );
+      console.error("Error processing video:", error);
     }
   });
 
   socket.on("disconnect", () => {
-    console.log(
-      "Socket disconnected:",
-      socket.id,
-    );
+    console.log("Socket disconnected:", socket.id);
   });
 });
 
 server.listen(PORT, () => {
-  console.log(
-    `Server running on http://localhost:${PORT}`,
-  );
+  console.log(`Server running on http://localhost:${PORT}`);
 });
