@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: opal-express
+    runtime: node
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ORIGINS
+        value: null,http://localhost:5173
+      - key: NEXT_API_HOST
+        sync: false
+      - key: IMAGEKIT_PRIVATE_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false

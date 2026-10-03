@@ -11,7 +11,28 @@ import Groq from "groq-sdk";
 
 dotenv.config();
 
-const PORT = 5001;
+const PORT = Number(process.env.PORT || 5001);
+const allowedOrigins = (
+  process.env.CORS_ORIGINS ||
+  process.env.ELECTRON_HOST ||
+  "http://localhost:5173"
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const apiBaseUrl = new URL(
+  process.env.NEXT_API_HOST || "http://localhost:3000/api/",
+);
+
+if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) {
+  throw new Error("PORT must be a valid TCP port number.");
+}
+
+if (!apiBaseUrl.pathname.endsWith("/")) {
+  apiBaseUrl.pathname += "/";
+}
+
+const nextApiUrl = (pathname) => new URL(pathname, apiBaseUrl).toString();
 
 const app = express();
 const server = http.createServer(app);
@@ -26,13 +47,22 @@ const groq = new Groq({
 
 const io = new Server(server, {
   cors: {
-    origin: process.env.ELECTRON_HOST,
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
   },
 });
 
-app.use(cors());
+app.use(
+  cors({
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+  }),
+);
 app.use(express.json());
+
+app.get("/health", (_req, res) => {
+  res.status(200).json({ status: "ok" });
+});
 
 const uploadDirectory = path.join(process.cwd(), "temp_upload");
 
@@ -91,7 +121,7 @@ io.on("connection", (socket) => {
       recordedChunks.delete(filename);
 
       const processingResponse = await axios.post(
-        `${process.env.NEXT_API_HOST}recording/${userId}/processing`,
+        nextApiUrl(`recording/${userId}/processing`),
         {
           filename,
         },
@@ -178,7 +208,7 @@ Do not return text outside the JSON object.
         title = generatedContent.title;
         summary = generatedContent.summary;
         const transcribeResponse = await axios.post(
-          `${process.env.NEXT_API_HOST}recording/${userId}/transcribe`,
+          nextApiUrl(`recording/${userId}/transcribe`),
           {
             filename,
             transcript,
@@ -194,7 +224,7 @@ Do not return text outside the JSON object.
       }
       //complete response :=
       const completeResponse = await axios.post(
-        `${process.env.NEXT_API_HOST}recording/${userId}/complete`,
+        nextApiUrl(`recording/${userId}/complete`),
         {
           filename,
           videoUrl: uploadResponse.url,
@@ -222,6 +252,6 @@ Do not return text outside the JSON object.
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server listening on port ${PORT}`);
 });
